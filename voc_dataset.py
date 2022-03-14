@@ -3,6 +3,8 @@ Written by Yufei Ye (https://github.com/JudyYe)
 Edited by Sanil Pande (https://github.com/sanilpande)
 -------------------------------------------------------- '''
 from __future__ import print_function
+from re import I
+from matplotlib.pyplot import axis
 
 import numpy as np
 import os
@@ -14,6 +16,7 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 import random
+import itertools
 import torchvision.transforms as transforms
 
 import scipy.io
@@ -158,9 +161,29 @@ class VOCDataset(Dataset):
         Normalize in the range (0, 1) according to image size (be careful of width/height and x/y correspondences)
         Make sure to return only the top_n proposals!
         '''
-
-
-
+        boxScores = {}
+        i = 0
+        boxScores = {k:v for k,v in enumerate(self.roi_data['boxScores'][0][index])}
+        boxes = {k:v for k,v in enumerate(self.roi_data['boxes'][0][index])}
+        boxScores = dict(sorted(boxScores.items(), key=lambda item: item[1]))
+        boxScores = dict(itertools.islice(boxScores.items(), self.top_n))
+        final_boxes = {}
+        for k in boxScores:
+            final_boxes[k] = boxes[k]
+        proposals = []
+        for k,v in final_boxes.items():
+            v = v.astype(float)
+            xmin = v[0] - v[2]/2
+            ymin = v[1] - v[3]/2
+            v[0] = (xmin + v[2]/2) / width
+            v[1] = (ymin + v[3]/2) / height
+            v[2] = v[2] / width
+            v[3] = v[3] / height
+            box = torch.unsqueeze(torch.from_numpy(v),0)
+            if len(proposals) == 0:
+                proposals = box
+            else:
+                proposals = torch.cat((proposals,box),axis=0)
         ret = {}
 
         ret['image']    = img
