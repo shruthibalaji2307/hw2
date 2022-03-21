@@ -14,6 +14,7 @@ import torch
 import torch.nn
 from PIL import Image
 from torch.utils.data import Dataset
+from torch.nn.utils.rnn import pad_sequence
 
 import random
 import itertools
@@ -48,7 +49,6 @@ class VOCDataset(Dataset):
 
         self.roi_data = scipy.io.loadmat(self.selective_search_dir + '/voc_2007_'+ split + '.mat')
 
-
         split_file = os.path.join(data_dir, 'ImageSets/Main', split + '.txt')
         with open(split_file) as fp:
             self.index_list = [line.strip() for line in fp]
@@ -74,11 +74,10 @@ class VOCDataset(Dataset):
          gt_boxes is a list of [xmin, ymin, xmax, ymax] values in the range 0 to 1
         """
 
-        # TODO: Modify your previous implemention of this function using this as referece
+        # TODO: Modify your previous implemention of this function using this as reference
         # TODO: You should return the GT boxes and the class labels associated with them
 
         label_list = []
-
         for index in self.index_list:
             fpath = os.path.join(self.ann_dir, index + '.xml')
             tree = ET.parse(fpath)
@@ -118,7 +117,7 @@ class VOCDataset(Dataset):
                             xmax = int(t[2].text) / width
                             ymax = int(t[3].text) / height
                             gt_boxes.append([xmin, ymin, xmax, ymax])
-                    
+
             for i in range(len(W)):
                 if W[i] == 2:
                     W[i] = 1
@@ -153,7 +152,6 @@ class VOCDataset(Dataset):
 
         # added for assn 2
         gt_class_list, gt_boxes = self.anno_list[index][2], self.anno_list[index][3]
-
         
         '''
         TODO:
@@ -161,31 +159,26 @@ class VOCDataset(Dataset):
         Normalize in the range (0, 1) according to image size (be careful of width/height and x/y correspondences)
         Make sure to return only the top_n proposals!
         '''
-        boxScores = {}
-        i = 0
         boxScores = {k:v for k,v in enumerate(self.roi_data['boxScores'][0][index])}
         boxes = {k:v for k,v in enumerate(self.roi_data['boxes'][0][index])}
-        boxScores = dict(sorted(boxScores.items(), key=lambda item: item[1]))
-        boxScores = dict(itertools.islice(boxScores.items(), self.top_n))
+        boxScores_sorted = dict(sorted(boxScores.items(), key=lambda item: item[1],reverse=True))
+        boxScores_top_n = dict(itertools.islice(boxScores_sorted.items(), self.top_n))
         final_boxes = {}
-        for k in boxScores:
+        for k in boxScores_top_n:
             final_boxes[k] = boxes[k]
         proposals = []
         for k,v in final_boxes.items():
             v = v.astype(float)
-            xmin = v[0] - v[2]/2
-            ymin = v[1] - v[3]/2
-            v[0] = (xmin + v[2]/2) / width
-            v[1] = (ymin + v[3]/2) / height
-            v[2] = v[2] / width
-            v[3] = v[3] / height
-            box = torch.unsqueeze(torch.from_numpy(v),0)
+            y_min,x_min,y_max,x_max = v
+            x_min, x_max = x_min / width, x_max / width
+            y_min, y_max = y_min / height, y_max / height
+            b = np.array([x_min,y_min,x_max,y_max])
+            box = torch.unsqueeze(torch.from_numpy(b),0)
             if len(proposals) == 0:
                 proposals = box
             else:
                 proposals = torch.cat((proposals,box),axis=0)
         ret = {}
-
         ret['image']    = img
         ret['label']    = label
         ret['wgt']      = wgt
@@ -194,3 +187,4 @@ class VOCDataset(Dataset):
         ret['gt_classes'] = gt_class_list
 
         return ret
+        #return img, label, wgt

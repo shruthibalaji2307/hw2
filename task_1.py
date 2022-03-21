@@ -17,15 +17,16 @@ import torch.utils.data
 import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
-import torchvision.models as models
+import torchvision.models as models 
 
+from PIL import Image
 
 from AlexNet import *
 from voc_dataset import *
 from utils import *
 
 import wandb
-USE_WANDB = False # use flags, wandb is not convenient for debugging
+USE_WANDB = True # use flags, wandb is not convenient for debugging
 
 
 model_names = sorted(name for name in models.__dict__
@@ -143,8 +144,9 @@ def main():
     # define loss function (criterion) and optimizer
     # also use an LR scheduler to decay LR by 10 every 30 epochs
     # you can also use PlateauLR scheduler, which usually works well
-
-
+    criterion = torch.nn.MultiLabelSoftMarginLoss()
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,factor=args.momentum,patience=30)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -168,14 +170,17 @@ def main():
     #TODO: Create Datasets and Dataloaders using VOCDataset - Ensure that the sizes are as required
     # Also ensure that data directories are correct - the ones use for testing by TAs might be different
     # Resize the images to 512x512
-
-
+    train_dataset = VOCDataset('trainval', image_size=512)
+    val_dataset = VOCDataset('test', image_size=512)
+    
+    class_id_to_label = dict(enumerate(train_dataset.CLASS_NAMES))
 
     train_sampler = None
     train_loader = torch.utils.data.DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         # shuffle=(train_sampler is None),
+        # collate_fn = train_dataset.voc_collate,
         shuffle=False,
         num_workers=args.workers,
         pin_memory=True,
@@ -193,18 +198,17 @@ def main():
     if args.evaluate:
         validate(val_loader, model, criterion)
         return
-
-    
     
     # TODO: Create loggers for wandb - ideally, use flags since wandb makes it harder to debug code.
-
+    if USE_WANDB:
+        wandb.init(project="vlr-hw2")
 
     for epoch in range(args.start_epoch, args.epochs):
-        adjust_learning_rate(optimizer, epoch)
+        #adjust_learning_rate(optimizer, epoch)
 
         # train for one epoch
-        train(train_loader, model, criterion, optimizer, epoch)
-
+        train(train_loader, class_id_to_label, model, criterion, optimizer, epoch)
+        # scheduler.step()
         # evaluate on validation set
         if epoch % args.eval_freq == 0 or epoch == args.epochs - 1:
             m1, m2 = validate(val_loader, model, criterion, epoch)
@@ -225,7 +229,7 @@ def main():
 
 
 #TODO: You can add input arguments if you wish
-def train(train_loader, model, criterion, optimizer, epoch):
+def train(train_loader, class_id_to_label, model, criterion, optimizer, epoch):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -236,30 +240,55 @@ def train(train_loader, model, criterion, optimizer, epoch):
     model.train()
 
     end = time.time()
-    for i, (data) in enumerate(train_loader):
+    #for i, (image,target,weight) in enumerate(train_loader):
+    for i, (image,target,wgt) in enumerate(train_loader):
         # measure data loading time
         data_time.update(time.time() - end)
 
         # TODO: Get inputs from the data dict
-
+        #image, target, wgt, gt_boxes, gt_classes = data['image'], data['label'], data['wgt'], data['gt_boxes'], data['gt_classes']
+        target = target.squeeze()
+        image, target, wgt = image.to('cuda'), target.to('cuda'), wgt.to('cuda')
 
         # TODO: Get output from model
         # TODO: Perform any necessary functions on the output such as clamping
         # TODO: Compute loss using ``criterion``
-        
-
+        imoutput = model(image).to('cuda')
+        temp_output = imoutput
+        imoutput = torch.squeeze(F.max_pool2d(imoutput, kernel_size=imoutput.size()[2:]))
+        loss = criterion(imoutput,target)
+                
+        if (i == 1 or i == 2) and USE_WANDB and epoch == 0 or epoch == 14 or epoch == 29:
+            img = torch.permute(image[0], (1,2,0))
+            img = img.cpu().detach().numpy()
+            img = (img - np.min(img))/(np.max(img) - np.min(img))
+            #img.show()
+            img = wandb.Image(img)
+            wandb.log({"Image": img})
+            for i in range(20):
+                if target[0][i] == 1:
+                    hm = torch.unsqueeze(temp_output[0][i], dim=0)
+                    hm = transforms.Resize((512,512))(hm)
+                    hm = torch.squeeze(torch.permute(hm, (1,2,0))) 
+                    hm = hm.cpu().detach().numpy()
+                    hm = np.array(hm * 255, dtype=np.uint8)
+                    #hm.show()
+                    hm = wandb.Image(hm)
+                    wandb.log({"Heatmap for label " + str(i): hm})
 
         # measure metrics and record loss
-        m1 = metric1(imoutput.data, target)
-        m2 = metric2(imoutput.data, target)
-        losses.update(loss.item(), input.size(0))
-        avg_m1.update(m1)
-        avg_m2.update(m2)
-
+        m1 = metric1(imoutput.data, target, wgt)
+        m2 = metric2(imoutput.data, target, wgt)
+        losses.update(loss.item(),n=image.size(0))
+        avg_m1.update(m1,n=image.size(0))
+        if m2 != -1:
+            avg_m2.update(m2,n=image.size(0))
 
         # TODO:
         # compute gradient and do SGD step
-
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -283,9 +312,10 @@ def train(train_loader, model, criterion, optimizer, epoch):
 
         #TODO: Visualize/log things as mentioned in handout
         #TODO: Visualize at appropriate intervals
-
-
-
+        if USE_WANDB and i % args.print_freq == 0:
+            wandb.log({'epoch': epoch, 'train/loss': loss})
+            wandb.log({'epoch': epoch, 'train/metric1': m1})
+            wandb.log({'epoch': epoch, 'train/metric2': m2})
 
         # End of train()
 
@@ -299,49 +329,78 @@ def validate(val_loader, model, criterion, epoch = 0):
     # switch to evaluate mode
     model.eval()
 
-    end = time.time()
-    for i, (data) in enumerate(val_loader):
-
-        # TODO: Get inputs from the data dict
-        
-
-
-        # TODO: Get output from model
-        # TODO: Perform any necessary functions on the output
-        # TODO: Compute loss using ``criterion``
-        
-
-
-        # measure metrics and record loss
-        m1 = metric1(imoutput.data, target)
-        m2 = metric2(imoutput.data, target)
-        losses.update(loss.item(), input.size(0))
-        avg_m1.update(m1)
-        avg_m2.update(m2)
-
-        # measure elapsed time
-        batch_time.update(time.time() - end)
+    with torch.no_grad():
         end = time.time()
+        for i, (image,target,wgt) in enumerate(val_loader):
 
-        if i % args.print_freq == 0:
-            print('Test: [{0}/{1}]\t'
-                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Metric1 {avg_m1.val:.3f} ({avg_m1.avg:.3f})\t'
-                  'Metric2 {avg_m2.val:.3f} ({avg_m2.avg:.3f})'.format(
-                      i,
-                      len(val_loader),
-                      batch_time=batch_time,
-                      loss=losses,
-                      avg_m1=avg_m1,
-                      avg_m2=avg_m2))
-
-        #TODO: Visualize things as mentioned in handout
-        #TODO: Visualize at appropriate intervals
+            # TODO: Get inputs from the data dict
+            #image, target, wgt = data['image'], data['label'], data['wgt']
+            target = target.squeeze()
+            image, target, wgt = image.to('cuda'), target.to('cuda'), wgt.to('cuda')
 
 
-    print(' * Metric1 {avg_m1.avg:.3f} Metric2 {avg_m2.avg:.3f}'.format(
-        avg_m1=avg_m1, avg_m2=avg_m2))
+            # TODO: Get output from model
+            # TODO: Perform any necessary functions on the output
+            # TODO: Compute loss using ``criterion``
+            imoutput = model(image).to('cuda')
+            temp_output = imoutput
+            imoutput = torch.squeeze(F.max_pool2d(imoutput, kernel_size=imoutput.size()[2:]))
+            loss = criterion(imoutput,target)
+
+            if (i == 50 or i == 100 or i == 150) and USE_WANDB:
+                img = torch.permute(image[0], (1,2,0))
+                img = img.cpu().detach().numpy()
+                img = (img - np.min(img))/(np.max(img) - np.min(img))
+                #img.show()
+                img = wandb.Image(img)
+                wandb.log({"Image": img})
+                for i in range(20):
+                    if target[0][i] == 1:
+                        hm = torch.unsqueeze(temp_output[0][i], dim=0)
+                        hm = transforms.Resize((512,512))(hm)
+                        hm = torch.squeeze(torch.permute(hm, (1,2,0))) 
+                        hm = hm.cpu().detach().numpy()
+                        hm = np.array(hm * 255, dtype=np.uint8)
+                        #hm.show()
+                        hm = wandb.Image(hm)
+                        wandb.log({"Heatmap for label " + str(i): hm})
+
+            # measure metrics and record loss
+            m1 = metric1(imoutput.data, target, wgt)
+            m2 = metric2(imoutput.data, target, wgt)
+            losses.update(loss,n=args.batch_size)
+            avg_m1.update(m1,n=args.batch_size)
+            if m2 != -1:
+                avg_m2.update(m2,n=args.batch_size)
+
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if i % args.print_freq == 0:
+                print('Test: [{0}/{1}]\t'
+                    'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                    'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                    'Metric1 {avg_m1.val:.3f} ({avg_m1.avg:.3f})\t'
+                    'Metric2 {avg_m2.val:.3f} ({avg_m2.avg:.3f})'.format(
+                        i,
+                        len(val_loader),
+                        batch_time=batch_time,
+                        loss=losses,
+                        avg_m1=avg_m1,
+                        avg_m2=avg_m2))
+
+            #TODO: Visualize things as mentioned in handout
+            #TODO: Visualize at appropriate intervals
+            if USE_WANDB and i % args.print_freq == 0:
+                wandb.log({'epoch': epoch, 'valid/loss': loss})
+
+    if epoch % 2 == 0:
+        print(' * Metric1 {avg_m1.avg:.3f} Metric2 {avg_m2.avg:.3f}'.format(
+            avg_m1=avg_m1, avg_m2=avg_m2))
+        if USE_WANDB:
+            wandb.log({'epoch': epoch, 'valid/metric1': m1})
+            wandb.log({'epoch': epoch, 'valid/metric2': m2})
 
     return avg_m1.avg, avg_m2.avg
 
@@ -372,16 +431,38 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
-def metric1(output, target):
+def metric1(output, target, wgt):
     # TODO: Ignore for now - proceed till instructed
-    
-    return [0]
+    np.seterr(divide='ignore', invalid='ignore')
+    sigmoid = torch.nn.Sigmoid()
+    output = sigmoid(output)
+    target, output, wgt = target.cpu().detach().numpy(),output.cpu().detach().numpy(),wgt.cpu().detach().numpy()
+    nclasses = target.shape[1]
+    AP = []
+    for cid in range(nclasses):
+        gt_cls = target[:, cid][wgt[:, cid] > 0].astype('float32')
+        pred_cls = output[:, cid][wgt[:, cid] > 0].astype('float32')
+        # As per PhilK. code:
+        if np.count_nonzero(gt_cls) != 0:
+            pred_cls -= 1e-5 * gt_cls
+            ap = sklearn.metrics.average_precision_score(gt_cls, pred_cls)
+            AP.append(ap)
+    mAP = np.mean(AP)
+    return mAP
 
-
-def metric2(output, target):
+def metric2(output, target, wgt):
     #TODO: Ignore for now - proceed till instructed
-    
-    return [0]
+    np.seterr(divide='ignore', invalid='ignore')
+    target, output = target.cpu().detach().numpy(),output.cpu().detach().numpy()
+    no_gt = False
+    for i in range(target.shape[0]):
+        if np.count_nonzero(target[i]) == 0:
+            no_gt = True
+    if not no_gt:
+        recall = sklearn.metrics.recall_score(target.astype('float32'), output.astype('float32') > 0.5, average="macro", zero_division=0)
+    else:
+        recall = -1
+    return recall
 
 
 if __name__ == '__main__':

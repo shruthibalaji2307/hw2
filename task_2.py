@@ -12,7 +12,7 @@ import pickle as pkl
 
 # imports
 from wsddn import WSDDN
-from voc_dataset import *
+from voc_dataset_2 import *
 import wandb
 from utils import nms, tensor_to_PIL
 from PIL import Image, ImageDraw
@@ -36,8 +36,8 @@ if rand_seed is not None:
 
 # load datasets and create dataloaders
 
-train_dataset = None
-val_dataset = None
+train_dataset = VOCDataset('trainval', 512)
+val_dataset = VOCDataset('test', 512)
 
 train_loader = torch.utils.data.DataLoader(
     train_dataset,
@@ -85,16 +85,16 @@ for name, param in pret_net.items():
 
 
 # Move model to GPU and set train mode
+own_state['features.0.weight'].requires_grad=False
+own_state['features.0.bias'].requires_grad=False
 net.load_state_dict(own_state)
 net.cuda()
 net.train()
 
 # TODO: Create optimizer for network parameters from conv2 onwards
 # (do not optimize conv1)
-
-
-
-
+optimizer = torch.optim.SGD(net.parameters(), lr=lr, momentum=momentum)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=lr_decay_steps, gamma=lr_decay)
 
 output_dir = "./"
 if not os.path.exists(output_dir):
@@ -127,18 +127,22 @@ def test_net(model, val_loader=None, thresh=0.05):
         gt_class_list   = data['gt_classes']
 
         #TODO: perform forward pass, compute cls_probs
-
-
+        cls_probs = model(image,rois=rois,gt_vec=target)
+        print(cls_probs).shape
+        
         # TODO: Iterate over each class (follow comments)
         for class_num in range(20):            
             # get valid rois and cls_scores based on thresh
-            
+            region_scores = cls_probs[:, class_num]
+            score_mask = region_scores > 0
+            valid_rois = rois[score_mask]
+            valid_scores = cls_probs[score_mask]
             # use NMS to get boxes and scores
-            
+            nms_mask = nms(valid_rois, valid_scores,confidence_score=0.05, threshold=0.5)
 
         #TODO: visualize bounding box predictions when required
         #TODO: Calculate mAP on test set
-
+            pass
 
 
 
@@ -153,16 +157,16 @@ for iter, data in enumerate(train_loader):
     gt_boxes        = data['gt_boxes']
     gt_class_list   = data['gt_classes']
     
+    image, target, wgt, rois = image.to('cuda'), target.to('cuda'), wgt.to('cuda'), rois.to('cuda')
 
     #TODO: perform forward pass - take care that proposal values should be in pixels for the fwd pass
     # also convert inputs to cuda if training on GPU
-
-
-
+    cls_probs = net(image,rois=rois,gt_vec=target)
+    print(cls_probs.shape)
     
-
     # backward pass and update
-    loss = net.loss    
+    loss = net.loss  
+    print("Loss : ",loss)  
     train_loss += loss.item()
     step_cnt += 1
 
