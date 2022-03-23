@@ -18,7 +18,7 @@ import torch.utils.data.distributed
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
-
+import matplotlib.pyplot as plt
 from PIL import Image
 
 from AlexNet import *
@@ -104,6 +104,7 @@ parser.add_argument(
     help='evaluate model on validation set')
 parser.add_argument(
     '--pretrained',
+    default=True,
     dest='pretrained',
     action='store_true',
     help='use pre-trained model')
@@ -146,8 +147,8 @@ def main():
     # you can also use PlateauLR scheduler, which usually works well
     criterion = torch.nn.MultiLabelSoftMarginLoss()
     # criterion = torch.nn.BCEWithLogitsLoss()
-    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,factor=args.momentum,patience=30)
+    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,factor=0.1,patience=30)
 
     # optionally resume from a checkpoint
     if args.resume:
@@ -183,7 +184,6 @@ def main():
         train_dataset,
         batch_size=args.batch_size,
         # shuffle=(train_sampler is None),
-        # collate_fn = train_dataset.voc_collate,
         shuffle=False,
         num_workers=args.workers,
         pin_memory=True,
@@ -241,13 +241,11 @@ def train(train_loader, class_id_to_label, model, criterion, optimizer, epoch):
     model.train()
 
     end = time.time()
-    #for i, (image,target,weight) in enumerate(train_loader):
     for i, (image,target,wgt) in enumerate(train_loader):
         # measure data loading time
         data_time_train.update(time.time() - end)
 
         # TODO: Get inputs from the data dict
-        #image, target, wgt, gt_boxes, gt_classes = data['image'], data['label'], data['wgt'], data['gt_boxes'], data['gt_classes']
         target = target.squeeze()
         image, target, wgt = image.to('cuda'), target.to('cuda'), wgt.to('cuda')
 
@@ -257,33 +255,33 @@ def train(train_loader, class_id_to_label, model, criterion, optimizer, epoch):
         imoutput = model(image).to('cuda')
         temp_output = imoutput
         imoutput = torch.squeeze(F.max_pool2d(imoutput, kernel_size=imoutput.size()[2:]))
+
         loss = criterion(imoutput,target)
 
         # Heatmap generation & wandb logging
-        if (i == 5 or i == 10) and USE_WANDB and (epoch == 0 or epoch == 14 or epoch == 29):
-            img = torch.permute(image[30], (1,2,0))
+        if (i == 6 or i == 12) and USE_WANDB and (epoch == 0 or epoch == 14 or epoch == 29):
+            img = torch.permute(image[23], (1,2,0))
             img = img.cpu().detach().numpy()
             img = (img - np.min(img))/(np.max(img) - np.min(img))
             img = wandb.Image(img, caption = "Epoch: " + str(epoch) + " Batch: " + str(i))
             wandb.log({"Image": img})
             for l in range(20):
-                if target[30][l] == 1:
-                    hm = torch.unsqueeze(temp_output[30][i], dim=0)
+                if target[23][l] == 1:
+                    hm = torch.unsqueeze(temp_output[23][i], dim=0)
                     hm = transforms.Resize((512,512))(hm)
                     hm = torch.squeeze(torch.permute(hm, (1,2,0))) 
                     hm = hm.cpu().detach().numpy()
                     hm = np.array(hm * 255, dtype=np.uint8)
-                    hm = wandb.Image(hm, caption = "Epoch: " + str(epoch) + "Batch: " + str(i) + " Label: " + class_id_to_label[l])
+                    hm_plt = plt.imshow(hm, cmap='jet')
+                    hm = wandb.Image(hm_plt, caption = "Epoch: " + str(epoch) + "Batch: " + str(i) + " Label: " + class_id_to_label[l])
                     wandb.log({"Heatmap for label " + str(l): hm})
 
         # measure metrics and record loss
-        m1 = metric1(imoutput.data, target, wgt)
-        m2 = metric2(imoutput.data, target, wgt)
+        m1 = metric1(imoutput.data, target)
+        m2 = metric2(imoutput.data, target)
         losses_train.update(loss.item(),n=image.size(0))
-        if m1 != -1:
-            avg_m1_train.update(m1,n=image.size(0))
-        if m2 != -1:
-            avg_m2_train.update(m2,n=image.size(0))
+        avg_m1_train.update(m1,n=image.size(0))
+        avg_m2_train.update(m2,n=image.size(0))
 
         # TODO:
         # compute gradient and do SGD step
@@ -311,12 +309,12 @@ def train(train_loader, class_id_to_label, model, criterion, optimizer, epoch):
                       avg_m1=avg_m1_train,
                       avg_m2=avg_m2_train))
 
-        #TODO: Visualize/log things as mentioned in handout
-        #TODO: Visualize at appropriate intervals
-        if USE_WANDB:
-            wandb.log({'epoch': epoch, 'train/loss': loss})
-            wandb.log({'epoch': epoch, 'train/metric1': m1})
-            wandb.log({'epoch': epoch, 'train/metric2': m2})
+    #TODO: Visualize/log things as mentioned in handout
+    #TODO: Visualize at appropriate intervals
+    if USE_WANDB:
+        wandb.log({'epoch': epoch, 'train/loss': losses_train.avg})
+        wandb.log({'epoch': epoch, 'train/metric1': avg_m1_train.avg})
+        wandb.log({'epoch': epoch, 'train/metric2': avg_m2_train.avg})
 
     if epoch % 2 == 0:
         print(' * Loss Avg {loss.avg:.3f} Training Metric1 Avg {avg_m1.avg:.3f} Training Metric2 Avg {avg_m2.avg:.3f}'.format(
@@ -360,30 +358,29 @@ def validate(val_loader, class_id_to_label, model, criterion, epoch = 0):
             loss = criterion(imoutput,target)
 
             # Heatmap generation & wandb logging
-            if (i == 5 or i == 10 or i == 15) and USE_WANDB and (epoch == args.epochs-1):
-                img = torch.permute(image[30], (1,2,0))
+            if (i == 6 or i == 12 or i == 18) and USE_WANDB and (epoch == args.epochs-1):
+                img = torch.permute(image[23], (1,2,0))
                 img = img.cpu().detach().numpy()
                 img = (img - np.min(img))/(np.max(img) - np.min(img))
                 img = wandb.Image(img, caption = "Validation - Epoch: " + str(epoch) + " Batch: " + str(i))
                 wandb.log({"Validation Image": img})
                 for l in range(20):
-                    if target[30][l] == 1:
-                        hm = torch.unsqueeze(temp_output[30][i], dim=0)
+                    if target[23][l] == 1:
+                        hm = torch.unsqueeze(temp_output[23][i], dim=0)
                         hm = transforms.Resize((512,512))(hm)
                         hm = torch.squeeze(torch.permute(hm, (1,2,0))) 
                         hm = hm.cpu().detach().numpy()
                         hm = np.array(hm * 255, dtype=np.uint8)
-                        hm = wandb.Image(hm, caption = "Validation - Epoch: " + str(epoch) + "Batch: " + str(i) + " Label: " + class_id_to_label[l])
+                        hm_plt = plt.imshow(hm, cmap='jet')
+                        hm = wandb.Image(hm_plt, caption = "Validation - Epoch: " + str(epoch) + "Batch: " + str(i) + " Label: " + class_id_to_label[l])
                         wandb.log({"Validation Heatmap for label " + str(l): hm})
 
             # measure metrics and record loss
-            m1 = metric1(imoutput.data, target, wgt)
-            m2 = metric2(imoutput.data, target, wgt)
+            m1 = metric1(imoutput.data, target)
+            m2 = metric2(imoutput.data, target)
             losses.update(loss,n=args.batch_size)
-            if m1 != -1:
-                avg_m1.update(m1,n=args.batch_size)
-            if m2 != -1:
-                avg_m2.update(m2,n=args.batch_size)
+            avg_m1.update(m1,n=args.batch_size)
+            avg_m2.update(m2,n=args.batch_size)
 
             # measure elapsed time
             batch_time.update(time.time() - end)
@@ -443,18 +440,18 @@ class AverageMeter(object):
         self.avg = self.sum / self.count
 
 
-def metric1(output, target, wgt):
+def metric1(output, target):
     # TODO: Ignore for now - proceed till instructed
     np.seterr(divide='ignore', invalid='ignore')
     sigmoid = torch.nn.Sigmoid()
     output = sigmoid(output)
-    target, output, wgt = target.cpu().detach().numpy(),output.cpu().detach().numpy(),wgt.cpu().detach().numpy()
+    target, output = target.cpu().detach().numpy(),output.cpu().detach().numpy()
 
     nclasses = target.shape[1]
     AP = []
     for cid in range(nclasses):
-        gt_cls = target[:, cid][wgt[:, cid] > 0].astype('float32')
-        pred_cls = output[:, cid][wgt[:, cid] > 0].astype('float32')
+        gt_cls = target[:, cid].astype('float32')
+        pred_cls = output[:, cid].astype('float32')
         # As per PhilK. code:
         if np.count_nonzero(gt_cls) != 0:
             pred_cls -= 1e-5 * gt_cls
@@ -463,15 +460,12 @@ def metric1(output, target, wgt):
     mAP = np.mean(AP)
     return mAP
 
-def metric2(output, target, wgt):
+def metric2(output, target):
     #TODO: Ignore for now - proceed till instructed
     np.seterr(divide='ignore', invalid='ignore')
     sigmoid = torch.nn.Sigmoid()
     output = sigmoid(output)
     target, output = target.cpu().detach().numpy(),output.cpu().detach().numpy()
-    wgt = wgt.cpu().detach().numpy()
-
-    target = target * wgt
 
     zero_gt = []
     for cid in range(target.shape[1]):
@@ -481,7 +475,7 @@ def metric2(output, target, wgt):
     target = np.delete(target,zero_gt,1)
     output = np.delete(output,zero_gt,1)
 
-    recall = sklearn.metrics.recall_score(target.astype('float32'), output.astype('float32') > 0.2, average="weighted", labels=np.arange(target.shape[1]))
+    recall = sklearn.metrics.recall_score(target.astype('float32'), output.astype('float32') > 0.5, average="micro")
     return recall
 
 

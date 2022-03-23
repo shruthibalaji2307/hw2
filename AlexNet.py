@@ -2,6 +2,7 @@ import numpy as np
 
 import torch.utils.data as data
 import torch.nn as nn
+from torch.nn.parameter import Parameter
 import torch.utils.model_zoo as model_zoo
 
 import torchvision.models as models
@@ -96,15 +97,27 @@ def localizer_alexnet(pretrained=False, **kwargs):
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """
     model = LocalizerAlexNet(**kwargs)
+    #TODO: Initialize weights correctly based on whether it is pretrained or not
+    if pretrained:
+        own_state_dict = model.state_dict()
+        state_dict = load_state_dict_from_url(model_urls["alexnet"], progress=True)
+        for name, param in state_dict.items():
+            if name not in own_state_dict:
+                continue
+            if isinstance(param, Parameter):
+                param = param.data
+            try:
+                if name.find('classifier') == -1:
+                    own_state_dict[name].copy_(param)
+                    print('Copied {}'.format(name))
+                    own_state_dict[name].requires_grad=False
+            except:
+                print('Did not find {}'.format(name))
+                continue
+        model.load_state_dict(own_state_dict)
     model.classifier[0].apply(weights_init_xavier)
     model.classifier[2].apply(weights_init_xavier)
     model.classifier[4].apply(weights_init_xavier)
-    #TODO: Initialize weights correctly based on whether it is pretrained or not
-    if pretrained:
-        own_state_dict = model.state_dict
-        state_dict = load_state_dict_from_url(model_urls["alexnet"], progress=True)
-        own_state_dict['features'] = state_dict['features']
-        model.load_state_dict(own_state_dict)
     return model
 
 
@@ -117,13 +130,25 @@ def localizer_alexnet_robust(pretrained=False, **kwargs):
     """
     model = LocalizerAlexNetRobust(**kwargs)
     #TODO: Ignore for now until instructed
+    #TODO: Initialize weights correctly based on whether it is pretrained or not
+    if pretrained:
+        own_state_dict = model.state_dict()
+        state_dict = load_state_dict_from_url(model_urls["alexnet"], progress=True)
+        for name, param in state_dict.items():
+            if name not in own_state_dict:
+                continue
+            if isinstance(param, Parameter):
+                param = param.data
+            try:
+                if name.find('classifier') == -1:
+                    own_state_dict[name].copy_(param)
+                    print('Copied {}'.format(name))
+                    own_state_dict[name].requires_grad=False
+            except:
+                print('Did not find {}'.format(name))
+                continue
+        model.load_state_dict(own_state_dict)
     model.classifier[0].apply(weights_init_xavier)
     model.classifier[2].apply(weights_init_xavier)
     model.classifier[4].apply(weights_init_xavier)
-    #TODO: Initialize weights correctly based on whether it is pretrained or not
-    if pretrained:
-        own_state_dict = model.state_dict
-        state_dict = load_state_dict_from_url(model_urls["alexnet"], progress=True)
-        own_state_dict['features'] = state_dict['features']
-        model.load_state_dict(own_state_dict)
     return model
