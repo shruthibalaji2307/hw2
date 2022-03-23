@@ -259,7 +259,7 @@ def train(train_loader, class_id_to_label, model, criterion, optimizer, epoch):
         loss = criterion(imoutput,target)
 
         # Heatmap generation & wandb logging
-        if (i == 6 or i == 12) and USE_WANDB and (epoch == 0 or epoch == 14 or epoch == 29):
+        if (i == 1 or i == 6) and USE_WANDB and (epoch == 0 or epoch == 14 or epoch == 29):
             img = torch.permute(image[23], (1,2,0))
             img = img.cpu().detach().numpy()
             img = (img - np.min(img))/(np.max(img) - np.min(img))
@@ -267,7 +267,7 @@ def train(train_loader, class_id_to_label, model, criterion, optimizer, epoch):
             wandb.log({"Image": img})
             for l in range(20):
                 if target[23][l] == 1:
-                    hm = torch.unsqueeze(temp_output[23][i], dim=0)
+                    hm = torch.unsqueeze(temp_output[23][l], dim=0)
                     hm = transforms.Resize((512,512))(hm)
                     hm = torch.squeeze(torch.permute(hm, (1,2,0))) 
                     hm = hm.cpu().detach().numpy()
@@ -358,7 +358,7 @@ def validate(val_loader, class_id_to_label, model, criterion, epoch = 0):
             loss = criterion(imoutput,target)
 
             # Heatmap generation & wandb logging
-            if (i == 6 or i == 12 or i == 18) and USE_WANDB and (epoch == args.epochs-1):
+            if (i == 10 or i == 65 or i == 100) and USE_WANDB and (epoch == args.epochs-1):
                 img = torch.permute(image[23], (1,2,0))
                 img = img.cpu().detach().numpy()
                 img = (img - np.min(img))/(np.max(img) - np.min(img))
@@ -366,7 +366,7 @@ def validate(val_loader, class_id_to_label, model, criterion, epoch = 0):
                 wandb.log({"Validation Image": img})
                 for l in range(20):
                     if target[23][l] == 1:
-                        hm = torch.unsqueeze(temp_output[23][i], dim=0)
+                        hm = torch.unsqueeze(temp_output[23][l], dim=0)
                         hm = transforms.Resize((512,512))(hm)
                         hm = torch.squeeze(torch.permute(hm, (1,2,0))) 
                         hm = hm.cpu().detach().numpy()
@@ -475,7 +475,7 @@ def metric2(output, target):
     target = np.delete(target,zero_gt,1)
     output = np.delete(output,zero_gt,1)
 
-    recall = sklearn.metrics.recall_score(target.astype('float32'), output.astype('float32') > 0.5, average="micro")
+    recall = sklearn.metrics.recall_score(target.astype('float32'), output.astype('float32') > 0.5, average="macro")
     return recall
 
 
