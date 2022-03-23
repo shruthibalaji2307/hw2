@@ -9,6 +9,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torchvision.transforms as transforms
 import torchvision.models as models
+from torchvision.ops import nms as torchnms
 import numpy as np
 
 
@@ -21,8 +22,9 @@ def nms(bounding_boxes, confidence_score, threshold=0.05):
 
     return: list of bounding boxes and scores
     """
-
-
+    nms_mask = torchnms(bounding_boxes, confidence_score, threshold)
+    boxes = bounding_boxes[nms_mask]
+    scores = confidence_score[nms_mask]
     return boxes, scores
 
 

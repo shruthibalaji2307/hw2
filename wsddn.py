@@ -40,13 +40,21 @@ class WSDDN(nn.Module):
             nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
             nn.ReLU(inplace=True),
         )
-        self.roi_pool   = (6,6)
-        self.classifier = nn.Linear(9216,4096)
-        self.score_fc   = nn.Linear(4096, 20)
-        self.bbox_fc    = nn.Linear(4096, 20)
+        
+        self.classifier = nn.Sequential(
+            nn.Dropout(),
+            nn.Linear(9216,4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(),
+            nn.Linear(4096,4096),
+            nn.ReLU(inplace=True)
+        )
+
+        self.score_fc   = nn.Linear(4096, self.n_classes)
+        self.bbox_fc    = nn.Linear(4096, self.n_classes)
+        
         # loss
         self.cross_entropy = None
-        #nn.CrossEntropyLoss()
 
     @property
     def loss(self):
@@ -60,21 +68,28 @@ class WSDDN(nn.Module):
         
         #TODO: Use image and rois as input
         # compute cls_prob which are N_roi X 20 scores
-        rois = rois.type(torch.FloatTensor)
-        rois = [rois[0]]
         out = self.features(image)
-        rois[0] = rois[0].to('cuda')
-        out = roi_pool(input=out, boxes=rois, output_size=(6,6), spatial_scale=31/512)
-        out = out.view(len(rois[0]), -1)
+        
+        # rois as Lx4 to roi_pool
+        rois_new = np.zeros((rois.shape[1],4))
+        rois_new[:,0] = rois[0,:,0].cpu().detach().numpy()
+        rois_new[:,1] = rois[0,:,1].cpu().detach().numpy()
+        rois_new[:,2] = rois[0,:,2].cpu().detach().numpy()
+        rois_new[:,3] = rois[0,:,3].cpu().detach().numpy()
+        rois_new = torch.tensor(rois_new)
+        rois_new = torch.cat((torch.zeros((rois_new.shape[0], 1)),rois_new), 1).type(torch.cuda.FloatTensor)
+        
+        out = roi_pool(input=out, boxes=rois_new, output_size=(6,6), spatial_scale=(31/512))
+        out = out.view(-1,9216)
+        
         out = self.classifier(out) 
-        classification_scores = F.softmax(self.score_fc(out), dim=1)
-        detection_scores = F.softmax(self.bbox_fc(out), dim=0)
+        classification_scores = F.softmax(self.score_fc(out),dim=1)
+        detection_scores = F.softmax(self.bbox_fc(out),dim=0)
         cls_prob = classification_scores * detection_scores
 
         if self.training:
-            label_vec = gt_vec.view(self.n_classes, -1)
+            label_vec = gt_vec.view(-1, self.n_classes)
             self.cross_entropy = self.build_loss(cls_prob, label_vec)
-            #self.loss = self.build_loss(cls_prob, label_vec)
         
         return cls_prob
 
@@ -90,8 +105,8 @@ class WSDDN(nn.Module):
         #TODO: Compute the appropriate loss using the cls_prob that is the
         #output of forward()
         #Checkout forward() to see how it is called
-        image_level_scores = torch.sum(cls_prob, dim=0)
+        image_level_scores = torch.sum(cls_prob, dim=0, keepdim=True)
         image_level_scores = torch.clamp(image_level_scores, min=0.0, max=1.0)
-        loss = torch.nn.MultiLabelSoftMarginLoss()
-        loss = loss(cls_prob, label_vec.squeeze())
+        loss = torch.nn.BCEWithLogitsLoss(reduction="sum")
+        loss = loss(image_level_scores,label_vec)
         return loss

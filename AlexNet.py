@@ -85,7 +85,7 @@ class LocalizerAlexNetRobust(nn.Module):
 def weights_init_xavier(m):
     # for every Linear layer in a model..
     nn.init.xavier_uniform_(m.weight)
-    m.bias.data.fill_(0.01)
+    m.bias.data.fill_(0.0)
 
 
 def localizer_alexnet(pretrained=False, **kwargs):

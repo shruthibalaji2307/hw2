@@ -153,6 +153,11 @@ class VOCDataset(Dataset):
         # added for assn 2
         gt_class_list, gt_boxes = self.anno_list[index][2], self.anno_list[index][3]
         
+        # Q2
+        gt_box_class = {}
+        for i,c in enumerate(gt_class_list):
+            gt_box_class[c] = np.array(gt_boxes[i])
+        
         '''
         TODO:
         Get bounding box proposals for the index from self.roi_data
@@ -164,9 +169,12 @@ class VOCDataset(Dataset):
         boxScores_sorted = dict(sorted(boxScores.items(), key=lambda item: item[1],reverse=True))
         boxScores_top_n = dict(itertools.islice(boxScores_sorted.items(), self.top_n))
         final_boxes = {}
+        final_scores = {}
         for k in boxScores_top_n:
             final_boxes[k] = boxes[k]
+            final_scores[k] = boxScores_top_n[k]
         proposals = []
+        scores = []
         for k,v in final_boxes.items():
             v = v.astype(float)
             y_min,x_min,y_max,x_max = v
@@ -174,17 +182,24 @@ class VOCDataset(Dataset):
             y_min, y_max = y_min / height, y_max / height
             b = np.array([x_min,y_min,x_max,y_max])
             box = torch.unsqueeze(torch.from_numpy(b),0)
+            score = float(final_scores[k][0])
             if len(proposals) == 0:
                 proposals = box
             else:
                 proposals = torch.cat((proposals,box),axis=0)
+            scores.append(score)
+                
+        scores = torch.FloatTensor(scores)
         ret = {}
         ret['image']    = img
         ret['label']    = label
         ret['wgt']      = wgt
         ret['rois']     = proposals
+        ret['roi_scores'] = scores
         ret['gt_boxes'] = gt_boxes
         ret['gt_classes'] = gt_class_list
+        # Q2
+        ret['gt_box_class'] = gt_box_class
 
         return ret
         #return img, label, wgt
