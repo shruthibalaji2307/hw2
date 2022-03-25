@@ -27,17 +27,17 @@ class WSDDN(nn.Module):
 
         #TODO: Define the WSDDN model
         self.features = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=2),
+            nn.Conv2d(3, 64, kernel_size=(11,11), stride=(4,4), padding=(2,2)),
             nn.ReLU(inplace=True),
-            nn.AvgPool2d(kernel_size=3, stride=2),
-            nn.Conv2d(64, 192, kernel_size=5, stride=1, padding=2),
+            nn.MaxPool2d(kernel_size=(3,3), stride=(2,2), dilation=(1,1), ceil_mode=False),
+            nn.Conv2d(64, 192, kernel_size=(5,5), stride=(1,1), padding=(2,2)),
             nn.ReLU(inplace=True),
-            nn.AvgPool2d(kernel_size=3, stride=2),
-            nn.Conv2d(192, 384, kernel_size=3, stride=1, padding=1),
+            nn.MaxPool2d(kernel_size=(3,3), stride=(2,2), dilation=(1,1), ceil_mode=False),
+            nn.Conv2d(192, 384, kernel_size=(3,3), stride=(1,1), padding=(1,1)),
             nn.ReLU(inplace=True),
-            nn.Conv2d(384, 256, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(384, 256, kernel_size=(3,3), stride=(1,1), padding=(1,1)),
             nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(256, 256, kernel_size=(3,3), stride=(1,1), padding=(1,1)),
             nn.ReLU(inplace=True),
         )
         
@@ -70,16 +70,13 @@ class WSDDN(nn.Module):
         # compute cls_prob which are N_roi X 20 scores
         out = self.features(image)
         
-        # rois as Lx4 to roi_pool
-        rois_new = np.zeros((rois.shape[1],4))
-        rois_new[:,0] = rois[0,:,0].cpu().detach().numpy()
-        rois_new[:,1] = rois[0,:,1].cpu().detach().numpy()
-        rois_new[:,2] = rois[0,:,2].cpu().detach().numpy()
-        rois_new[:,3] = rois[0,:,3].cpu().detach().numpy()
-        rois_new = torch.tensor(rois_new)
-        rois_new = torch.cat((torch.zeros((rois_new.shape[0], 1)),rois_new), 1).type(torch.cuda.FloatTensor)
+        rois = rois.type(torch.FloatTensor)
+        rois = [rois[0]]
+        out = self.features(image)
+        rois[0] = rois[0].to('cuda')
+        rois[0] = rois[0] * 512
         
-        out = roi_pool(input=out, boxes=rois_new, output_size=(6,6), spatial_scale=(31/512))
+        out = roi_pool(input=out, boxes=rois, output_size=(6,6), spatial_scale=(31/512))
         out = out.view(-1,9216)
         
         out = self.classifier(out) 
@@ -107,6 +104,6 @@ class WSDDN(nn.Module):
         #Checkout forward() to see how it is called
         image_level_scores = torch.sum(cls_prob, dim=0, keepdim=True)
         image_level_scores = torch.clamp(image_level_scores, min=0.0, max=1.0)
-        loss = torch.nn.BCEWithLogitsLoss(reduction="sum")
+        loss = torch.nn.BCELoss(reduction="sum")
         loss = loss(image_level_scores,label_vec)
         return loss
