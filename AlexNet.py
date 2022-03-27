@@ -20,25 +20,25 @@ class LocalizerAlexNet(nn.Module):
         #TODO: Define model
         self.num_classes = num_classes
         self.features = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=2),
+            nn.Conv2d(3, 64, kernel_size=(11,11), stride=(4,4), padding=(2,2)),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2),
-            nn.Conv2d(64, 192, kernel_size=5, stride=1, padding=2),
+            nn.MaxPool2d(kernel_size=(3,3), stride=(2,2), dilation=(1,1), ceil_mode=False),
+            nn.Conv2d(64, 192, kernel_size=(5,5), stride=(1,1), padding=(2,2)),
             nn.ReLU(inplace=True),
-            nn.MaxPool2d(kernel_size=3, stride=2),
-            nn.Conv2d(192, 384, kernel_size=3, stride=1, padding=1),
+            nn.MaxPool2d(kernel_size=(3,3), stride=(2,2), dilation=(1,1), ceil_mode=False),
+            nn.Conv2d(192, 384, kernel_size=(3,3), stride=(1,1), padding=(1,1)),
             nn.ReLU(inplace=True),
-            nn.Conv2d(384, 256, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(384, 256, kernel_size=(3,3), stride=(1,1), padding=(1,1)),
             nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(256, 256, kernel_size=(3,3), stride=(1,1), padding=(1,1)),
             nn.ReLU(inplace=True),
         )
         self.classifier = nn.Sequential(
-            nn.Conv2d(256, 256, kernel_size=3, stride=1),
+            nn.Conv2d(256, 256, kernel_size=(3,3), stride=(1,1)),
             nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, kernel_size=1, stride=1),
+            nn.Conv2d(256, 256, kernel_size=(1,1), stride=(1,1)),
             nn.ReLU(inplace=True),
-            nn.Conv2d(256, num_classes, kernel_size=1, stride=1),
+            nn.Conv2d(256, self.num_classes, kernel_size=(1,1), stride=(1,1)),
         )
 
 
@@ -56,25 +56,25 @@ class LocalizerAlexNetRobust(nn.Module):
         #TODO: Define model
         self.num_classes = num_classes
         self.features = nn.Sequential(
-            nn.Conv2d(3, 64, kernel_size=11, stride=4, padding=2),
+            nn.Conv2d(3, 64, kernel_size=(11,11), stride=(4,4), padding=(2,2)),
             nn.ReLU(inplace=True),
-            nn.AvgPool2d(kernel_size=3, stride=2),
-            nn.Conv2d(64, 192, kernel_size=5, stride=1, padding=2),
+            nn.AvgPool2d(kernel_size=(3,3), stride=(2,2), ceil_mode=False),
+            nn.Conv2d(64, 192, kernel_size=(5,5), stride=(1,1), padding=(2,2)),
             nn.ReLU(inplace=True),
-            nn.AvgPool2d(kernel_size=3, stride=2),
-            nn.Conv2d(192, 384, kernel_size=3, stride=1, padding=1),
+            nn.AvgPool2d(kernel_size=(3,3), stride=(2,2), ceil_mode=False),
+            nn.Conv2d(192, 384, kernel_size=(3,3), stride=(1,1), padding=(1,1)),
             nn.ReLU(inplace=True),
-            nn.Conv2d(384, 256, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(384, 256, kernel_size=(3,3), stride=(1,1), padding=(1,1)),
             nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, kernel_size=3, stride=1, padding=1),
+            nn.Conv2d(256, 256, kernel_size=(3,3), stride=(1,1), padding=(1,1)),
             nn.ReLU(inplace=True),
         )
         self.classifier = nn.Sequential(
-            nn.Conv2d(256, 256, kernel_size=3, stride=1),
+            nn.Conv2d(256, 256, kernel_size=(3,3), stride=(1,1)),
             nn.ReLU(inplace=True),
-            nn.Conv2d(256, 256, kernel_size=1, stride=1),
+            nn.Conv2d(256, 256, kernel_size=(1,1), stride=(1,1)),
             nn.ReLU(inplace=True),
-            nn.Conv2d(256, num_classes, kernel_size=1, stride=1),
+            nn.Conv2d(256, self.num_classes, kernel_size=(1,1), stride=(1,1)),
         )
 
     def forward(self, x):

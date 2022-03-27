@@ -1,3 +1,4 @@
+from concurrent.futures import thread
 import os
 import random
 import time
@@ -22,7 +23,7 @@ def nms(bounding_boxes, confidence_score, threshold=0.05):
 
     return: list of bounding boxes and scores
     """
-    nms_mask = torchnms(bounding_boxes, confidence_score, threshold)
+    nms_mask = torchnms(bounding_boxes, confidence_score, iou_threshold=threshold)
     boxes = bounding_boxes[nms_mask]
     scores = confidence_score[nms_mask]
     return boxes, scores
@@ -55,6 +56,26 @@ def tensor_to_PIL(image):
     return original_image
 
 
+def get_box_data_q2(classes, bbox_coordinates):
+    """
+    classes : tensor containing class predictions/gt
+    bbox_coordinates: tensor containing [[xmin0, ymin0, xmax0, ymax0], [xmin1, ymin1, ...]] (Nx4)
+
+    return list of boxes as expected by the wandb bbox plotter
+    """
+    box_list = [{
+            "position": {
+                "minX": bbox_coordinates[i][0].item(),
+                "minY": bbox_coordinates[i][1].item(),
+                "maxX": bbox_coordinates[i][2].item(),
+                "maxY": bbox_coordinates[i][3].item(),
+            },
+            "class_id" : int(classes[i].item()),
+        } for i in range(len(classes))
+        ]
+
+    return box_list
+
 def get_box_data(classes, bbox_coordinates):
     """
     classes : tensor containing class predictions/gt
@@ -74,7 +95,6 @@ def get_box_data(classes, bbox_coordinates):
         ]
 
     return box_list
-
 
 
 

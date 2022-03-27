@@ -145,8 +145,7 @@ def main():
     # define loss function (criterion) and optimizer
     # also use an LR scheduler to decay LR by 10 every 30 epochs
     # you can also use PlateauLR scheduler, which usually works well
-    criterion = torch.nn.MultiLabelSoftMarginLoss()
-    # criterion = torch.nn.BCEWithLogitsLoss()
+    criterion = torch.nn.BCEWithLogitsLoss(reduction='mean')
     optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,factor=0.1,patience=30)
 
@@ -252,29 +251,24 @@ def train(train_loader, class_id_to_label, model, criterion, optimizer, epoch):
         # TODO: Get output from model
         # TODO: Perform any necessary functions on the output such as clamping
         # TODO: Compute loss using ``criterion``
+        optimizer.zero_grad()
         imoutput = model(image).to('cuda')
-        temp_output = imoutput
         imoutput = torch.squeeze(F.max_pool2d(imoutput, kernel_size=imoutput.size()[2:]))
 
         loss = criterion(imoutput,target)
 
         # Heatmap generation & wandb logging
-        if (i == 1 or i == 6) and USE_WANDB and (epoch == 0 or epoch == 14 or epoch == 29):
-            img = torch.permute(image[23], (1,2,0))
-            img = img.cpu().detach().numpy()
-            img = (img - np.min(img))/(np.max(img) - np.min(img))
-            img = wandb.Image(img, caption = "Epoch: " + str(epoch) + " Batch: " + str(i))
-            wandb.log({"Image": img})
-            for l in range(20):
-                if target[23][l] == 1:
-                    hm = torch.unsqueeze(temp_output[23][l], dim=0)
-                    hm = transforms.Resize((512,512))(hm)
-                    hm = torch.squeeze(torch.permute(hm, (1,2,0))) 
-                    hm = hm.cpu().detach().numpy()
-                    hm = np.array(hm * 255, dtype=np.uint8)
-                    hm_plt = plt.imshow(hm, cmap='jet')
-                    hm = wandb.Image(hm_plt, caption = "Epoch: " + str(epoch) + "Batch: " + str(i) + " Label: " + class_id_to_label[l])
-                    wandb.log({"Heatmap for label " + str(l): hm})
+        if (i % 10 == 0) and (epoch == 0 or epoch % 14 == 0 or epoch == 29) and USE_WANDB:  
+            iminput = torch.unsqueeze(image[0,:,:,:],0)
+            heatmap = model(iminput)
+            gt_classes = torch.where(target[0] == 1)[0][0].item()
+            plt.imsave('heat_map.png', -heatmap[0, gt_classes, :, :].cpu().detach().numpy(), cmap='jet')
+            heatmap = Image.open('heat_map.png')
+            heatmap = heatmap.resize((512,512))
+            img = wandb.Image(iminput[0,:,:,:], caption = "Image")
+            heatmap = wandb.Image(heatmap, caption = "Heatmap")
+            wandb.log({"Train Image epoch: " + str(epoch) + " Iter: " + str(i): img})
+            wandb.log({"Train Heatmap epoch: " + str(epoch) + " Iter: " + str(i): heatmap})
 
         # measure metrics and record loss
         m1 = metric1(imoutput.data, target)
@@ -285,7 +279,6 @@ def train(train_loader, class_id_to_label, model, criterion, optimizer, epoch):
 
         # TODO:
         # compute gradient and do SGD step
-        optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
@@ -308,21 +301,25 @@ def train(train_loader, class_id_to_label, model, criterion, optimizer, epoch):
                       loss=losses_train,
                       avg_m1=avg_m1_train,
                       avg_m2=avg_m2_train))
+        if USE_WANDB:
+            wandb.log({'epoch': epoch, 'train/loss': loss})
+            wandb.log({'epoch': epoch, 'train/metric1': m1})
+            wandb.log({'epoch': epoch, 'train/metric2': m2})
 
     #TODO: Visualize/log things as mentioned in handout
     #TODO: Visualize at appropriate intervals
-    if USE_WANDB:
-        wandb.log({'epoch': epoch, 'train/loss': losses_train.avg})
-        wandb.log({'epoch': epoch, 'train/metric1': avg_m1_train.avg})
-        wandb.log({'epoch': epoch, 'train/metric2': avg_m2_train.avg})
+    if USE_WANDB and epoch % 2 == 0:
+        wandb.log({'iter': i, 'train/loss_avg': losses_train.avg})
+        wandb.log({'iter': i, 'train/metric1_avg': avg_m1_train.avg})
+        wandb.log({'iter': i, 'train/metric2_avg': avg_m2_train.avg})
 
     if epoch % 2 == 0:
         print(' * Loss Avg {loss.avg:.3f} Training Metric1 Avg {avg_m1.avg:.3f} Training Metric2 Avg {avg_m2.avg:.3f}'.format(
         loss=losses_train, avg_m1=avg_m1_train, avg_m2=avg_m2_train))
 
     if epoch == (args.epochs - 1):
-        print(' * Final Loss Avg {loss.avg:.3f} Final Training Metric1 Avg {avg_m1.avg:.3f} Final Training Metric2 Avg {avg_m2.avg:.3f}'.format(
-        loss=losses_train, avg_m1=avg_m1_train, avg_m2=avg_m2_train))
+        print(' * Final Loss {loss:.3f} Final Training Metric1 {m1:.3f} Final Training Metric2 {m2:.3f}'.format(
+        loss=loss, m1=m1, m2=m2))
 
     metric = losses_train.avg
     return metric
@@ -330,7 +327,6 @@ def train(train_loader, class_id_to_label, model, criterion, optimizer, epoch):
 
 
 def validate(val_loader, class_id_to_label, model, criterion, epoch = 0):
-    print("In validate")
     batch_time = AverageMeter()
     losses = AverageMeter()
     avg_m1 = AverageMeter()
@@ -353,27 +349,21 @@ def validate(val_loader, class_id_to_label, model, criterion, epoch = 0):
             # TODO: Perform any necessary functions on the output
             # TODO: Compute loss using ``criterion``
             imoutput = model(image).to('cuda')
-            temp_output = imoutput
             imoutput = torch.squeeze(F.max_pool2d(imoutput, kernel_size=imoutput.size()[2:]))
             loss = criterion(imoutput,target)
 
             # Heatmap generation & wandb logging
             if (i == 10 or i == 65 or i == 100) and USE_WANDB and (epoch == args.epochs-1):
-                img = torch.permute(image[23], (1,2,0))
-                img = img.cpu().detach().numpy()
-                img = (img - np.min(img))/(np.max(img) - np.min(img))
-                img = wandb.Image(img, caption = "Validation - Epoch: " + str(epoch) + " Batch: " + str(i))
-                wandb.log({"Validation Image": img})
-                for l in range(20):
-                    if target[23][l] == 1:
-                        hm = torch.unsqueeze(temp_output[23][l], dim=0)
-                        hm = transforms.Resize((512,512))(hm)
-                        hm = torch.squeeze(torch.permute(hm, (1,2,0))) 
-                        hm = hm.cpu().detach().numpy()
-                        hm = np.array(hm * 255, dtype=np.uint8)
-                        hm_plt = plt.imshow(hm, cmap='jet')
-                        hm = wandb.Image(hm_plt, caption = "Validation - Epoch: " + str(epoch) + "Batch: " + str(i) + " Label: " + class_id_to_label[l])
-                        wandb.log({"Validation Heatmap for label " + str(l): hm})
+                iminput = torch.unsqueeze(image[0,:,:,:],0)
+                heatmap = model(iminput)
+                gt_classes = torch.where(target[0] == 1)[0][0].item()
+                plt.imsave('heat_map.png', -heatmap[0, gt_classes, :, :].cpu().detach().numpy(), cmap='jet')
+                heatmap = Image.open('heat_map.png')
+                heatmap = heatmap.resize((512,512))
+                img = wandb.Image(iminput[0,:,:,:], caption = "Image")
+                heatmap = wandb.Image(heatmap, caption = "Heatmap")
+                wandb.log({"Val Image epoch: " + str(epoch) + " Iter: " + str(i): img})
+                wandb.log({"Val Heatmap epoch: " + str(epoch) + " Iter: " + str(i): heatmap})
 
             # measure metrics and record loss
             m1 = metric1(imoutput.data, target)
@@ -401,13 +391,20 @@ def validate(val_loader, class_id_to_label, model, criterion, epoch = 0):
 
             #TODO: Visualize things as mentioned in handout
             #TODO: Visualize at appropriate intervals
-            if USE_WANDB and i % args.print_freq == 0:
-                wandb.log({'epoch': epoch, 'valid/loss': loss})
+            if USE_WANDB:
+                wandb.log({'iter': i, 'valid/loss': loss})
+                wandb.log({'iter': i, 'valid/m1': m1})
+                wandb.log({'iter': i, 'valid/m2': m2})
+            
+        if epoch == args.epochs - 1:
+            print(' * Final Valid Loss {loss:.3f} Final Valid Metric1 {m1:.3f} Final Valid Metric2 {m2:.3f}'.format(
+            loss=loss, m1=m1, m2=m2))
 
-        print(' * Valid Loss Avg {loss.avg:.3f} Training Metric1 Avg {avg_m1.avg:.3f} Training Metric2 Avg {avg_m2.avg:.3f}'.format(
+        print(' * Valid Loss Avg {loss.avg:.3f} Valid Metric1 Avg {avg_m1.avg:.3f} Valid Metric2 Avg {avg_m2.avg:.3f}'.format(
         loss=losses, avg_m1=avg_m1, avg_m2=avg_m2))
 
         if USE_WANDB and epoch%2 == 0:
+            wandb.log({'iter': i, 'train/loss_avg': losses.avg})
             wandb.log({'epoch': epoch, 'valid/metric1': avg_m1.avg})
             wandb.log({'epoch': epoch, 'valid/metric2': avg_m2.avg})
 
@@ -443,10 +440,12 @@ class AverageMeter(object):
 def metric1(output, target):
     # TODO: Ignore for now - proceed till instructed
     np.seterr(divide='ignore', invalid='ignore')
+    # Taking a Sigmoid of the model output
     sigmoid = torch.nn.Sigmoid()
     output = sigmoid(output)
     target, output = target.cpu().detach().numpy(),output.cpu().detach().numpy()
 
+    # Computing AP for each class and averaging
     nclasses = target.shape[1]
     AP = []
     for cid in range(nclasses):
@@ -463,10 +462,12 @@ def metric1(output, target):
 def metric2(output, target):
     #TODO: Ignore for now - proceed till instructed
     np.seterr(divide='ignore', invalid='ignore')
+    # Taking a Sigmoid of the model output
     sigmoid = torch.nn.Sigmoid()
     output = sigmoid(output)
     target, output = target.cpu().detach().numpy(),output.cpu().detach().numpy()
 
+    # Ignoring classes that have no ground truth elements in the batch
     zero_gt = []
     for cid in range(target.shape[1]):
         if np.count_nonzero(target[:,cid]) == 0:
@@ -475,7 +476,8 @@ def metric2(output, target):
     target = np.delete(target,zero_gt,1)
     output = np.delete(output,zero_gt,1)
 
-    recall = sklearn.metrics.recall_score(target.astype('float32'), output.astype('float32') > 0.5, average="macro")
+    # Recall threshold: 0.5, averaging: micro
+    recall = sklearn.metrics.recall_score(target.astype('float32'), output.astype('float32') > 0.5, average="micro", labels = np.arange(target.shape[1]))
     return recall
 
 

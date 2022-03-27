@@ -5,6 +5,7 @@ from __future__ import print_function
 import os
 import torch
 import torch.utils.model_zoo as model_zoo
+import matplotlib.pyplot as plt
 from torch.nn.parameter import Parameter
 import numpy as np
 from datetime import datetime
@@ -29,10 +30,10 @@ end_step = 20000
 lr_decay_steps = 150000
 lr_decay = 1. / 10
 rand_seed = 1024
-epochs = 5
+epochs = 7
 
 lr = 0.001
-momentum = 0.6
+momentum = 0.4
 weight_decay = 0.0005
 USE_WANDB = True
 # ------------
@@ -127,6 +128,7 @@ re_cnt = False
 val_interval = 5000
 #val_interval=200
 
+# Average meter from task_1
 class AverageMeter(object):
     """Computes and stores the average and current value"""
 
@@ -144,7 +146,8 @@ class AverageMeter(object):
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
-        
+
+# mAP calculation function
 def compute_map(output, target):
     # TODO: Ignore for now - proceed till instructed
     np.seterr(divide='ignore', invalid='ignore')
@@ -162,12 +165,33 @@ def compute_map(output, target):
             pred_cls -= 1e-5 * gt_cls
             ap = sklearn.metrics.average_precision_score(gt_cls, pred_cls, average=None)
             AP.append(ap)
-    print(AP)
+        else:
+            AP.append(0)
     mAP = np.nanmean(AP)
-    return mAP
+    return AP, mAP
+
+# Generating the classwise APs as a color-coded line plot
+def plot_ap(x,y):
+    def get_cmap(n, name='hsv'):
+        return plt.cm.get_cmap(name, n)
+
+    x = x * len(val_loader.dataset)  
+
+    NUM_COLORS = 20
+    cmap = get_cmap(NUM_COLORS)
+    fig = plt.figure(figsize = (12,10))
+    ax = fig.add_subplot(111)
+
+    ax.plot(x,y)
+
+    for i in range(epochs):
+        y_curr = np.reshape(y[i], (1,20))
+        ax.plot(y_curr,color=cmap(i))
+    plt.legend(labels=val_dataset.CLASS_NAMES,loc='lower right')
+    plt.show()
 
 
-def test_net(model, val_loader=None, thresh=0.02, epoch):
+def test_net(model, val_loader=None, thresh=0.02, epoch=0):
     """
     tests the networks and visualize the detections
     thresh is the confidence threshold
@@ -181,8 +205,6 @@ def test_net(model, val_loader=None, thresh=0.02, epoch):
         all_gt_boxes = 0
         for iter, data in enumerate(val_loader):
             selected_boxes[iter] = []
-            if iter % 500 == 0:
-                print("Validation iter: ", iter)
             current_gt = np.zeros(20)
             current_pred = np.zeros(20)
             # one batch = data for one image
@@ -213,6 +235,9 @@ def test_net(model, val_loader=None, thresh=0.02, epoch):
                 boxes, scores = nms(valid_rois, valid_scores, threshold=0.3)
                 # print(boxes.shape)
                 # print(boxes)
+                # If ground truth exists for the class, compare the nms boxes in descending order with gt box
+                # If IOU > 0.5, select box as true positive and mark gt_box as used
+                # Else mark box as false positive
                 if class_num in gt_class_list:
                     used_gt = set()
                     for box in boxes:
@@ -235,51 +260,54 @@ def test_net(model, val_loader=None, thresh=0.02, epoch):
             ground_truth[iter,:] = current_gt
             predictions[iter,:] = current_pred
             
-            if iter % 250 == 0:
-                if len(selected_boxes[iter]) > 0:
-                    selected_boxes_tensor = selected_boxes[iter][0][0]
-                    selected_boxes_class = torch.zeros(len(selected_boxes[iter]))
-                    selected_boxes_class[0] = torch.tensor(selected_boxes[iter][0][1])
-                    if len(selected_boxes[iter]) > 1:
-                        for i in range(1,len(selected_boxes[iter])):
-                            selected_boxes_tensor = torch.cat((selected_boxes_tensor,selected_boxes[iter][i][0]),dim=0)
-                            selected_boxes_class[i] = torch.tensor(selected_boxes[iter][i][1])
-                if len(selected_boxes[iter]) == 1:
-                    selected_boxes_tensor = torch.unsqueeze(selected_boxes_tensor,dim=0)
-                #nums = range(len(selected_boxes[iter]))
-                img = wandb.Image(image, boxes={
-                        "predictions": {
-                            "box_data": get_box_data_q2(selected_boxes_class, selected_boxes_tensor),
-                            "class_labels": class_id_to_label,
-                            },
-                        }, caption = "Epoch: " + str(epoch))
-                wandb.log({"proposals": img})
+            # Wandb plotting just the images where 2 or more boxes are selected for better model understanding
+            if len(selected_boxes[iter]) > 1 and epoch == 0 or epoch == (epochs-1):
+                print("Epoch: ", epoch, " Iter: ", iter, " Selected boxes: ", len(selected_boxes[iter]))
+                selected_boxes_tensor = torch.unsqueeze(selected_boxes[iter][0][0],dim=0)
+                selected_boxes_class = torch.zeros(len(selected_boxes[iter]))
+                selected_boxes_class[0] = torch.tensor(selected_boxes[iter][0][1])
+                if len(selected_boxes[iter]) > 1:
+                    for i in range(1,len(selected_boxes[iter])):
+                        selected_boxes_tensor = torch.cat((selected_boxes_tensor,torch.unsqueeze(selected_boxes[iter][i][0],dim=0)),dim=0)
+                        selected_boxes_class[i] = torch.tensor(selected_boxes[iter][i][1])
+                if USE_WANDB:
+                    img = wandb.Image(image, boxes={
+                            "predictions": {
+                                "box_data": get_box_data_q2(selected_boxes_class, selected_boxes_tensor),
+                                "class_labels": class_id_to_label,
+                                },
+                            }, caption = "Epoch: " + str(epoch))
+                    wandb.log({"proposals": img})
 
         #TODO: visualize bounding box predictions when required
         #TODO: Calculate mAP on test set
-        print(ground_truth.shape,predictions.shape)
-        mAP = compute_map(ground_truth,predictions)
-        print(mAP)
-    return mAP
+            #if iter % 500 == 0:
+        AP, mAP = compute_map(ground_truth,predictions)
+        print("Epoch: ", epoch, " Classwise AP: ", AP, " mAP: ", mAP)
+    return AP, mAP
 # Training
 
-def save_checkpoint(state, filename='task_2_second.pth.tar'):
-    print("Saving trained model to task_2_second.pth")
+# Saving model
+def save_checkpoint(state, filename='task_2_third.pth.tar'):
+    print("Saving trained model to task_2_third.pth.tar")
     torch.save(state, filename)
-    
-if os.path.exists('task_2_second.pth.tar'):
-    checkpoint = torch.load('task_2_second.pth.tar')
+
+# If saved model exists, load and go straight to eval
+if os.path.exists('task_2_fourth.pth.tar'):
+    checkpoint = torch.load('task_2_fourth.pth.tar')
     net.load_state_dict(checkpoint['state_dict'])
     print("Loaded trained model")
     net.eval()
-    mAP = test_net(net, val_loader)
-    print("mAP ", mAP)
+    mAP = test_net(net, val_loader, 0)
     net.train()
 else:
+    # Else perform training
     disp_interval = 500
     train_loss = AverageMeter()
+    epoch_wise_ap = np.zeros((epochs,20))
     for epoch in range(epochs):
         print("Epoch : ", epoch)
+        AP = []
         for iter, data in enumerate(train_loader):
 
             #TODO: get one batch and perform forward pass
@@ -310,22 +338,29 @@ else:
             
             if iter % disp_interval == 0:
                 print("Epoch: ", epoch, " Iteration:", iter, " Loss: ", train_loss.avg)
-                wandb.log({'epoch': epoch, 'train/loss': train_loss.avg})
+                if USE_WANDB:
+                    wandb.log({'Epoch': epoch, 'train/loss': train_loss.avg})
+                    wandb.log({'Iter': iter, 'train/loss': train_loss.avg})
 
             #TODO: evaluate the model every N iterations (N defined in handout)
             
-        #if iter%val_interval == 0 and iter != 0 and epoch % 5 == 0:
-        # if epoch == 4:
         net.eval()
-        mAP = test_net(net, val_loader, 0.02, epoch)
+        AP, mAP = test_net(net, val_loader, 0.02, epoch)
+        epoch_wise_ap[epoch,:] = AP
         print("Epoch: ", epoch, " mAP: ", mAP)
-        wandb.log({'epoch': epoch, 'valid/mAP': mAP})
+        if USE_WANDB:
+            wandb.log({'epoch': epoch, 'valid/mAP': mAP})
         net.train()
 
         #TODO: Perform all visualizations here
         #The intervals for different things are defined in the handout
         scheduler.step()
-        
+
+    # Plot class-wise APs
+    x = np.array([0,1,2,3,4,5,6])
+    print("Epoch wise ap: ", epoch_wise_ap)
+    plot_ap(x,epoch_wise_ap)
+    
     save_checkpoint({
     'epoch': epoch + 1,
     'state_dict': net.state_dict(),
